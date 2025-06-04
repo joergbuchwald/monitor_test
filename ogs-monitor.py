@@ -32,7 +32,8 @@ from ogstools.logparser.regexes import (
     IterationEnd,
     IterationStart,
     TimeStepConvergenceCriterion,
-    ComponentConvergenceCriterion
+    ComponentConvergenceCriterion,
+    SimulationExecutionTime
 )
 
 from bokeh.models import ColumnDataSource, Select
@@ -81,6 +82,10 @@ def update_figure():
 #        print(item)
     if isinstance(item, Termination):
         print(f"Consumer: Termination signal ({item}) received. Exiting.")
+        observer.stop()
+        observer.join()
+    elif isinstance(item, SimulationExecutionTime):
+        print(f"Simulation execution time: {item.execution_time}")
         observer.stop()
         observer.join()
     elif isinstance(item, TimeStepStart):
