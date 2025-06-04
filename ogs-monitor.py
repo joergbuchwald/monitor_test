@@ -13,7 +13,7 @@ import tempfile
 from watchdog.observers import Observer, ObserverType
 from bokeh.plotting import figure
 from bokeh.io import show, push_notebook, curdoc
-from bokeh.layouts import layout
+from bokeh.layouts import layout, column
 
 from ogstools.logparser.log_file_handler import (
     LogFileHandler,
@@ -35,7 +35,7 @@ from ogstools.logparser.regexes import (
     ComponentConvergenceCriterion
 )
 
-from bokeh.models import ColumnDataSource
+from bokeh.models import ColumnDataSource, Select
 
 data_source = ColumnDataSource(data = {"time_step": [], "step_size": [], "assembly_time": [], "linear_solver_time": [], "step_start_time": [], "iteration_number": []})
 data_source_iter = ColumnDataSource(data = {"iteration_number": [], "vspan": [], "line_width": [], "dx_x": [], "dx_x_0": [], "dx_x_1": [],"dx_x_2": [], "dx_x_3": [], "dx_x_4": [],"dx_x_5": []})
@@ -58,6 +58,8 @@ print("Starting observer...")
 
 observer.start()
 
+initial_plot = "Step Size"
+
 fig_1 = figure(  width=500, height=450,
              tooltips=[("step_size", "@step_size"),],
              title="Step Size", y_axis_type="log"
@@ -68,19 +70,19 @@ fig_1.line(x="time_step", y="step_size", line_color="tomato", line_width=3.0, so
 fig_1.xaxis.axis_label = "time_step (s)"
 fig_1.yaxis.axis_label = "step size (s)"
 print("Figure created.")
+dropdown = Select(title="Choose plot type:", value=initial_plot, options=["Step Size", "Iteration Number"])
 
 def update_figure():
     global records, observer, data_source, data_source_iter
-    print("Updating figure...")
     item = records.get()
     if item is None:
         print("No new item in queue, skipping update.")
-    else:
-        print(item)
+#    else:
+#        print(item)
     if isinstance(item, Termination):
         print(f"Consumer: Termination signal ({item}) received. Exiting.")
         observer.stop()
-        return
+        observer.join()
     elif isinstance(item, TimeStepStart):
         print(f"Timestep: {item.time_step}, Step size: {item.step_size}")
         new_row = {"step_size": [item.step_size,], "time_step": [item.time_step,], "assembly_time": [0], "linear_solver_time": [0], "step_start_time": [item.step_start_time], "iteration_number": [0]}
@@ -114,10 +116,27 @@ def update_figure():
         index = len(data_source_iter.data["iteration_number"])-1
         data_source_iter.patch({f"dx_x_{item.component}": [(index, item.dx_x)]})
 
-print("Adding periodic callback to update figure...")
-curdoc().add_periodic_callback(update_figure, 1000)
+def newplot(attr, old, new):
+    fig_1.renderers = []
 
-print("Adding observer to document...")
-curdoc().add_root(layout([[fig_1]]))
+    if new == "Step Size":
+        fig_1.line(x="time_step", y="step_size", line_color="tomato", line_width=3.0, source=data_source)
 
-observer.join()
+        fig_1.xaxis.axis_label = "time_step (s)"
+        fig_1.yaxis.axis_label = "step size (s)"
+
+    elif new == "Iteration Number":
+        fig_1.line(x="time_step", y="iteration_number", line_color="tomato", line_width=3.0, source=data_source)
+
+        fig_1.xaxis.axis_label = "time_step (s)"
+        fig_1.yaxis.axis_label = "number of iterations"
+
+curdoc().add_periodic_callback(update_figure, 1)
+
+dropdown.on_change("value", newplot)
+layout = column(dropdown, fig_1)
+
+curdoc().add_root(layout)
+curdoc().title = "Dynamic Plot Example"
+
+
