@@ -44,7 +44,7 @@ from bokeh.models import ColumnDataSource, Select, Range1d, HoverTool, Button
 from bokeh.models.widgets import Slider
 
 if os.path.exists(sys.argv[1]):
-    file_path = sys.argv[1]
+    file_path = Path(sys.argv[1])
 else:
     print("File path does not exist. Please provide a valid path.")
     sys.exit(1)
@@ -53,33 +53,44 @@ if len(sys.argv) > 2:
     print("Set update interval to:", sys.argv[2])
     update_interval = int(sys.argv[2])
 else:
-    print("No update interval provided, using default of 1000 ms.")
-    update_interval = 100
+    print("No update interval provided, using default of 10 ms.")
+    update_interval = 10
 
-block = True
 data_source = ColumnDataSource(data = {"time_step": [], "step_size": [], "assembly_time": [], "linear_solver_time": [], "step_start_time": [], "iteration_number": []})
 data_source_iter = ColumnDataSource(data = {"iteration_number": [], "vspan": [], "line_width": [], "dx_x": [], "dx_x_0": [], "dx_x_1": [],"dx_x_2": [], "dx_x_3": [], "dx_x_4": [],"dx_x_5": []})
 
-original_file = Path(file_path)
+def start_observer():
+    records: Queue = Queue()
+    observer: ObserverType = Observer()
+    status: Context = Context()
+    handler = LogFileHandler(
+            file_path,
+            queue=records,
+            status=status,
+            stop_callback=lambda: (print("Stop Observer"), observer.stop()),
+        )
+    observer.schedule(handler, path=str(file_path.parent), recursive=False)
 
-records: Queue = Queue()
-observer: ObserverType = Observer()
-status: Context = Context()
+    print("Starting observer...")
 
-handler = LogFileHandler(
-    original_file,
-    queue=records,
-    status=status,
-    stop_callback=lambda: (print("Stop Observer"), observer.stop()),
-)
-observer.schedule(handler, path=str(original_file.parent), recursive=False)
+    observer.start()
+    block = True
+    return observer, records, handler, status, block
 
-print("Starting observer...")
+def stop_observer():
+    global observer, block
+    if observer.is_alive():
+        print("Stopping observer...")
+        observer.stop()
+        observer.join()
+        block = False
+        print("Observer stopped.")
+    else:
+        print("Observer is not running.")
 
-observer.start()
+observer, records, handler, status, block = start_observer()
 
-
-os.utime(original_file, None)  # Update the file's last modified time to ensure it is read from the beginning
+os.utime(file_path, None)  # Update the file's last modified time to ensure it is read from the beginning
 
 logo = "ogs_textlogo.png"
 
@@ -129,7 +140,8 @@ hover = HoverTool(
 )
 fig_2.add_tools(hover)
 
-#button = Button(label = "Stop / Start Observer", button_type = "danger")
+button_start = Button(label = "Start Observer", button_type = "success")
+button_stop = Button(label = "Stop Observer", button_type = "danger")
 range_ts = 0
 range_iter = 100
 
@@ -145,27 +157,23 @@ dropdown_lin = Select(title="Linear Scale Plots:", value="Iteration Number", opt
 dropdown_log = Select(title="Logarithmic Scale Plots", value="dx_x_0", options=["Step Size", "Timestep Start Time", "dx_x", "dx_x_0", "dx_x_1", "dx_x_2", "dx_x_3", "dx_x_4", "dx_x_5"])
 
 def update_figure():
-    global records, observer, data_source, data_source_iter, block, handler, original_file, fig_1, fig_2
+    global data_source, data_source_iter, records, block, fig_1, fig_2
     try:
         item = records.get(block=block)
-        #if isinstance(item, SimulationStartTime):
-        #    print(f"Simulation start time: {item.start_time}")
-        #    block = True
-         #   if not observer.is_alive():
-        #        print("Observer is not alive, starting a new one.")
-        #        observer.schedule(handler, path=str(original_file.parent), recursive=False)
-        #        print("Starting observer...")
-        #        observer.start()
-        if isinstance(item, Termination):
+        if isinstance(item, SimulationStartTime):
+            print(f"Simulation start time: {item.start_time}")
+            block = True
+            data_source.data = {"time_step": [], "step_size": [], "assembly_time": [], "linear_solver_time": [], "step_start_time": [], "iteration_number": []}
+            data_source_iter.data = {"iteration_number": [], "vspan": [], "line_width": [], "dx_x": [], "dx_x_0": [], "dx_x_1": [],"dx_x_2": [], "dx_x_3": [], "dx_x_4": [],"dx_x_5": []}
+
+        elif isinstance(item, Termination):
             print(f"Consumer: Termination signal ({item}) received. Exiting.")
             block = False
-            observer.stop()
-            observer.join()
+            stop_observer()
         elif isinstance(item, SimulationExecutionTime):
             print(f"Simulation execution time: {item.execution_time}")
             block = False
-            observer.stop()
-            observer.join()
+            stop_observer()
         elif isinstance(item, TimeStepStart):
             print(f"Timestep: {item.time_step}, Step size: {item.step_size}")           
             if range_ts == 0:
@@ -394,8 +402,12 @@ def newplot_log(attr, old, new):
 curdoc().add_periodic_callback(update_figure, update_interval)
 
 
-#def start_stop_observer():
-#    global observer, block, handler, original_file, button
+def start_observer_wrapper():
+    global observer, records, handler, status, block
+    if observer.is_alive():
+       observer, records, handler, status, block = start_observer()
+    else:
+        print("Observer is already running.")
 #    if observer.is_alive():
 #        print("Stopping observer...")
 #        block = False
@@ -411,7 +423,8 @@ curdoc().add_periodic_callback(update_figure, update_interval)
 #        observer.start()
 #        button.label = "Observer running."
 #        button.button_type = "danger"
-#button.on_click(start_stop_observer)
+button_start.on_click(start_observer)
+button_stop.on_click(stop_observer)
 def update_slider_ts(attr, old, new):
     global range_ts, slider_ts
     range_ts = new
@@ -424,7 +437,7 @@ slider_ts.on_change("value", update_slider_ts)
 slider_iterations.on_change("value", update_slider_iterations)
 dropdown_lin.on_change("value", newplot_lin)
 dropdown_log.on_change("value", newplot_log)
-layout = column(page_logo, row(slider_ts, slider_iterations), row(column(dropdown_lin, fig_1), column(dropdown_log, fig_2)))
+layout = column(page_logo, row(button_start, button_stop), row(slider_ts, slider_iterations), row(column(dropdown_lin, fig_1), column(dropdown_log, fig_2)))
 
 curdoc().add_root(layout)
 curdoc().title = "OGS Log Monitor"
